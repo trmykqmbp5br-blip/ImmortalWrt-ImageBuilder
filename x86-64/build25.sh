@@ -60,9 +60,9 @@ PACKAGES="$PACKAGES openssh-sftp-server"
 # 文件管理器
 PACKAGES="$PACKAGES luci-i18n-filemanager-zh-cn"
 # DNS 广告过滤 (AdGuardHome)
-PACKAGES="$PACKAGES luci-app-adguardhome luci-i18n-adguardhome-zh-cn"
-# 反向代理 nginx
-PACKAGES="$PACKAGES nginx"
+PACKAGES="$PACKAGES luci-app-adguardhome"
+# 反向代理 nginx (25.12 包名为 nginx-ssl + luci-nginx)
+PACKAGES="$PACKAGES nginx-ssl luci-nginx"
 # BBR 拥塞控制
 PACKAGES="$PACKAGES kmod-tcp-bbr"
 # ======== shell/apk-custom-packages.sh =======
@@ -72,8 +72,8 @@ PACKAGES="$PACKAGES $CUSTOM_PACKAGES"
 
 # 判断是否需要编译 Docker 插件
 if [ "$INCLUDE_DOCKER" = "yes" ]; then
-    PACKAGES="$PACKAGES luci-i18n-dockerman-zh-cn"
-    echo "Adding package: luci-i18n-dockerman-zh-cn"
+    PACKAGES="$PACKAGES dockerd docker luci-app-dockerman luci-i18n-dockerman-zh-cn"
+    echo "Adding package: dockerd docker luci-app-dockerman luci-i18n-dockerman-zh-cn"
 fi
 
 # 构建镜像
