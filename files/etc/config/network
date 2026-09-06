@@ -1,0 +1,51 @@
+# x86-64 双 WAN 默认拓扑（PPPoE 账号密码不写入镜像，首次启动后配置）
+
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1'
+	option netmask '255.0.0.0'
+
+config globals 'globals'
+	option ula_prefix 'fd6a:967:c8ed::/48'
+	option packet_steering '2'
+	option steering_flows '1024'
+
+config device 'br_lan'
+	option name 'br-lan'
+	option type 'bridge'
+	option stp '0'
+	list ports 'eth0'
+	list ports 'eth1'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.100.1'
+	option netmask '255.255.255.0'
+	option ip6assign '64'
+	option ip6addr 'fd6a:967:c8ed::1/64'
+	option stp '0'
+
+config interface 'wan'
+	option device 'eth2'
+	option proto 'pppoe'
+	option ipv6 'auto'
+	option norelease '1'
+	option multipath 'off'
+
+config interface 'wanb'
+	option device 'eth3'
+	option proto 'pppoe'
+	option ipv6 'auto'
+	option norelease '1'
+	option multipath 'off'
+
+config device 'docker0'
+	option type 'bridge'
+	option name 'docker0'
+
+config interface 'docker'
+	option device 'docker0'
+	option proto 'none'
+	option auto '0'

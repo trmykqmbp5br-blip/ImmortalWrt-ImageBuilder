@@ -4,6 +4,18 @@
 LOGFILE="/etc/config/uci-defaults-log.txt"
 echo "Starting 99-custom.sh at $(date)" >>$LOGFILE
 
+# 本镜像预置的网络脚本：权限在首次启动时再次校正，避免文件系统/打包过程丢失执行位。
+for file in \
+    /etc/rc.local \
+    /etc/hotplug.d/iface/99-multipath \
+    /usr/bin/ecmp-reload \
+    /usr/bin/nat-masq-ensure.sh; do
+    [ -f "$file" ] && chmod 755 "$file"
+done
+
+# 将镜像内的 sysctl 参数立即应用；后续启动由系统正常加载 /etc/sysctl.conf。
+sysctl -p /etc/sysctl.conf >/dev/null 2>&1 || true
+
 # 设置主机名映射，解决安卓原生 TV 无法联网的问题
 uci add dhcp domain
 uci set "dhcp.@domain[-1].name=time.android.com"

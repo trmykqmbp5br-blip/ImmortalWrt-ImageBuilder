@@ -65,6 +65,8 @@ PACKAGES="$PACKAGES luci-app-adguardhome"
 PACKAGES="$PACKAGES nginx-ssl luci-nginx"
 # BBR 拥塞控制
 PACKAGES="$PACKAGES kmod-tcp-bbr"
+# tc-full：99-multipath 用于给两条 PPPoE 挂载 fq_codel
+PACKAGES="$PACKAGES tc-full"
 # ======== shell/apk-custom-packages.sh =======
 # 合并imm仓库以外的第三方插件 暂时注释
 PACKAGES="$PACKAGES $CUSTOM_PACKAGES"

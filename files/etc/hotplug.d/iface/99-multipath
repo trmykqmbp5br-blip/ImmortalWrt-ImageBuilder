@@ -1,0 +1,59 @@
+#!/bin/sh
+log() { echo "[99-multipath] $(date '+%H:%M:%S') $*" >> /tmp/99-multipath.log; }
+setup_ecmp() {
+  log "triggered by ${INTERFACE} ${ACTION}"
+  # eth RPS 4核分摊
+  # fq_codel for BBR pacing on PPPoE (quantum 6000 适配 2.5Gbps)
+  tc qdisc replace dev pppoe-wan root fq_codel target 3ms quantum 6000 2>/dev/null
+  tc qdisc replace dev pppoe-wanb root fq_codel target 3ms quantum 6000 2>/dev/null
+
+  # 重载 nftables ecmp 规则
+  nft flush table ip ecmp 2>/dev/null
+  nft flush table ip6 ecmp 2>/dev/null
+  if nft -f /etc/ecmp-rules.nft 2>/dev/null; then
+    log "nft rules loaded ✅"
+  else
+    log "nft -f failed ❌"
+  fi
+
+  local wan_gw="" wanb_gw=""
+  wan_gw=$(ip addr show pppoe-wan 2>/dev/null | grep 'inet ' | awk '{print $4}' | cut -d/ -f1)
+  wanb_gw=$(ip addr show pppoe-wanb 2>/dev/null | grep 'inet ' | awk '{print $4}' | cut -d/ -f1)
+  log "gw: pppoe-wan=$wan_gw pppoe-wanb=$wanb_gw"
+
+  # eth0 (AP 上行) TX 队列深度调大
+  ip link set eth0 qlen 10000 2>/dev/null
+
+  # 清理重复 ip rule（awk 取 priority 时去掉冒号）
+  for p in $(ip rule show | grep fwmark | awk '{print $1}' | cut -d: -f1); do ip rule del priority $p 2>/dev/null; done
+
+  if [ -n "$wan_gw" ] && [ -n "$wanb_gw" ]; then
+    ip route replace default via "$wan_gw" dev pppoe-wan 2>/dev/null
+    ip route replace default via "$wan_gw" dev pppoe-wan table 100 2>/dev/null
+    ip route replace default via "$wanb_gw" dev pppoe-wanb table 200 2>/dev/null
+    ip rule add fwmark 0x1 lookup 100 2>/dev/null
+    ip rule add fwmark 0x2 lookup 200 2>/dev/null
+    ip route replace 192.168.100.0/24 dev br-lan table 100 2>/dev/null
+    ip route replace 192.168.100.0/24 dev br-lan table 200 2>/dev/null
+    log "ECMP route+rule done ✅"
+  elif [ -n "$wan_gw" ]; then
+    ip route replace default via "$wan_gw" dev pppoe-wan 2>/dev/null
+    ip route replace default via "$wan_gw" dev pppoe-wan table 100 2>/dev/null
+    ip route flush table 200 2>/dev/null
+    log "wanb not ready, single WAN mode (pppoe-wan)"
+  elif [ -n "$wanb_gw" ]; then
+    ip route replace default via "$wanb_gw" dev pppoe-wanb 2>/dev/null
+    ip route replace default via "$wanb_gw" dev pppoe-wanb table 200 2>/dev/null
+    ip route flush table 100 2>/dev/null
+    log "wan not ready, single WAN mode (pppoe-wanb)"
+  else
+    log "no WAN GW found ❌"
+  fi
+
+  # WAN MASQUERADE 规则（共用脚本）
+  sh /usr/bin/nat-masq-ensure.sh 2>/dev/null
+  log "nat-masq-ensure done"
+}
+case "${ACTION}" in ifup|ifdown)
+  case "${INTERFACE}" in wan|wanb) setup_ecmp ;; esac
+;; esac

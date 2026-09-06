@@ -1,0 +1,47 @@
+table ip ecmp {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+        iif "br-lan" ip daddr 192.168.100.0/24 return
+        iif "br-lan" ip daddr 192.168.100.1 return
+        iif "br-lan" ct status dnat return
+        iif "br-lan" ct state established,related ct mark != 0x00000000 meta mark set ct mark
+        iif "br-lan" ct state new meta l4proto tcp meta mark set jhash ip saddr . ip daddr . tcp sport mod 2
+        iif "br-lan" ct state new meta l4proto udp meta mark set jhash ip saddr . ip daddr . udp sport mod 2
+        iif "br-lan" ct state new meta mark 0x00000000 meta mark set 0x00000002
+        iif "br-lan" ct state new ct mark set meta mark
+    }
+    chain output {
+        type filter hook output priority mangle; policy accept;
+        oif "br-lan" return
+        oif "lo" return
+        meta mark != 0x00000000 return
+        ct state established,related ct mark != 0x00000000 meta mark set ct mark
+        ct state new meta l4proto tcp meta mark set jhash ip saddr . ip daddr . tcp sport mod 2
+        ct state new meta l4proto udp meta mark set jhash ip saddr . ip daddr . udp sport mod 2
+        ct state new meta mark 0x00000000 meta mark set 0x00000002
+        ct state new ct mark set meta mark
+    }
+}
+table ip6 ecmp {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+        iif "br-lan" ip6 daddr fd6a:967:c8ed::/48 return
+        iif "br-lan" ct status dnat return
+        iif "br-lan" ct state established,related ct mark != 0x00000000 meta mark set ct mark
+        iif "br-lan" ct state new meta l4proto tcp meta mark set jhash ip6 saddr . ip6 daddr . tcp sport mod 2
+        iif "br-lan" ct state new meta l4proto udp meta mark set jhash ip6 saddr . ip6 daddr . udp sport mod 2
+        iif "br-lan" ct state new meta mark 0x00000000 meta mark set 0x00000002
+        iif "br-lan" ct state new ct mark set meta mark
+    }
+    chain output {
+        type filter hook output priority mangle; policy accept;
+        oif "br-lan" return
+        oif "lo" return
+        meta mark != 0x00000000 return
+        ct state established,related ct mark != 0x00000000 meta mark set ct mark
+        ct state new meta l4proto tcp meta mark set jhash ip6 saddr . ip6 daddr . tcp sport mod 2
+        ct state new meta l4proto udp meta mark set jhash ip6 saddr . ip6 daddr . udp sport mod 2
+        ct state new meta mark 0x00000000 meta mark set 0x00000002
+        ct state new ct mark set meta mark
+    }
+}

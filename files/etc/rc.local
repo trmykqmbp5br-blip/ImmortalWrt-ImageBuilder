@@ -1,0 +1,40 @@
+#!/bin/sh
+
+# 日志函数
+log() {
+  echo "[$(date +%H:%M:%S)] $*" >> /tmp/rc.local.log
+}
+
+log "=== rc.local start ==="
+
+# NIC 调优
+for dev in eth0 eth1 eth2 eth3; do
+  echo 0 > /sys/class/net/$dev/gro_flush_timeout 2>/dev/null
+done
+# 关 AP 端口流控（防 AP 过载时 pause 整条链路，igc 不支持强制模式所以不能 autoneg off）
+ethtool -A eth0 rx off tx off 2>/dev/null
+# eth0 AP 上行队列深度
+ip link set eth0 qlen 10000 2>/dev/null
+log "NIC tuning done"
+
+# 桥接调优：老化时间 300s（减少 FDB 重学习）
+echo 300000 > /sys/devices/virtual/net/br-lan/bridge/ageing_time 2>/dev/null
+log "bridge ageing set"
+
+# CPU 频率: schedutil 自动调频(最低频率交内核自动管理), 上限 2.5GHz(防过热)
+for i in 0 1 2 3; do
+  echo 2500000 > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_max_freq 2>/dev/null
+done
+log "cpufreq auto (max 2.5GHz)"
+
+# Lucky
+/usr/bin/lucky -cd /etc/config/lucky.daji >/dev/null 2>&1 &
+
+# ULA 地址
+ip -6 addr add fd6a:967:c8ed::1/64 dev br-lan 2>/dev/null || true
+
+# IPv6 GUA 由 odhcpd 从 PD 自动分配
+sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1
+
+log "=== rc.local end ==="
+exit 0
