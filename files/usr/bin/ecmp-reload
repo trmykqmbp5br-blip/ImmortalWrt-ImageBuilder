@@ -1,98 +1,49 @@
 #!/bin/sh
-# ecmp-reload — 一键重置 ecmp 负载均衡状态 + 系统级清理，代替重启
-# 用法: sh /usr/bin/ecmp-reload
-
-log() {
-  echo "[$(date +%H:%M:%S)] $*"
-}
-
-log "=== ecmp-reload start ==="
-
-# 1. nftables 重载（先删表防残留）
-log "nft reload (delete table + recreate)..."
-nft delete table ip ecmp 2>/dev/null
-nft delete table ip6 ecmp 2>/dev/null
-sleep 1
-if nft -f /etc/ecmp-rules.nft; then
-  # 验证 ecmp 规则实际生效
-  ecmp_rules=$(nft list table ip ecmp 2>/dev/null | grep -c 'jhash')
-  if [ "$ecmp_rules" -ge 1 ]; then
-    log "  nft rules: ${ecmp_rules} ecmp rules ✅"
-  else
-    log "  ⚠️ nft -f 成功但规则未出现，重试一次..."
-    nft delete table ip ecmp 2>/dev/null
-    nft delete table ip6 ecmp 2>/dev/null
-    sleep 1
-    if nft -f /etc/ecmp-rules.nft; then
-      ecmp_rules_retry=$(nft list table ip ecmp 2>/dev/null | grep -c 'jhash')
-      [ "$ecmp_rules_retry" -ge 1 ] && log "  重试成功 ✅ (${ecmp_rules_retry} rules)" \
-                                      || log "  ❌ 重试后规则仍未出现！请检查 /etc/ecmp-rules.nft"
-    else
-      log "  ❌ nft -f 重试也失败！"
-    fi
-  fi
-else
-  log "  ❌ nft -f 失败！请检查 /etc/ecmp-rules.nft 语法"
+# Default reload preserves connections and caches. Recovery is explicit.
+set -eu
+HOTPLUG=/etc/hotplug.d/iface/99-multipath
+mode=${1:-reload}
+[ "$#" -le 1 ] || { echo 'Usage: ecmp-reload [--check|--recover]' >&2; exit 2; }
+case "$mode" in
+  reload|--check|--recover) ;;
+  *) echo 'Usage: ecmp-reload [--check|--recover]' >&2; exit 2 ;;
+esac
+[ -r "$HOTPLUG" ] || { echo "Missing $HOTPLUG" >&2; exit 1; }
+sh -n "$HOTPLUG"
+if [ "$mode" = --recover ]; then
+  command -v conntrack >/dev/null 2>&1 || {
+    echo 'Recovery requires conntrack; no changes made. Use normal reload.' >&2
+    exit 1
+  }
 fi
-
-# 2. ip rule 清理（清重复再建）
-log "ip rule cleanup..."
-for p in $(ip rule show | grep fwmark | awk '{print $1}' | cut -d: -f1); do
-  ip rule del priority $p 2>/dev/null
-done
-ip rule add fwmark 0x1 lookup 100
-ip rule add fwmark 0x2 lookup 200
-log "  ip rules: fwmark 0x1->100, 0x2->200"
-
-# 确保路由表有默认路由
-wan_gw=$(ip addr show pppoe-wan 2>/dev/null | grep 'inet ' | awk '{print $4}' | cut -d/ -f1)
-wanb_gw=$(ip addr show pppoe-wanb 2>/dev/null | grep 'inet ' | awk '{print $4}' | cut -d/ -f1)
-
-# 注意: 25.12 的 busybox ip 不支持 initcwnd 参数, 会静默失败, 这里不能带
-[ -n "$wan_gw" ] && ip route replace default via "$wan_gw" dev pppoe-wan table 100 2>/dev/null
-[ -n "$wanb_gw" ] && ip route replace default via "$wanb_gw" dev pppoe-wanb table 200 2>/dev/null
-
-# 确保 LAN 路由在策略路由表中
-ip route replace 192.168.100.0/24 dev br-lan table 100 2>/dev/null
-ip route replace 192.168.100.0/24 dev br-lan table 200 2>/dev/null
-
-# 2.5. WAN MASQUERADE 规则（共用脚本）
-log "NAT masquerade ensure..."
-sh /usr/bin/nat-masq-ensure.sh
-log "  NAT masquerade done"
-
-# 3. conntrack 清理
-log "conntrack cleanup..."
-# 清 ecmp 标记的连接（不影响已有正常连接）
-conntrack -D --mark 1 2>/dev/null && log "  cleared conntrack mark=1" || log "  no conntrack mark=1"
-conntrack -D --mark 2 2>/dev/null && log "  cleared conntrack mark=2" || log "  no conntrack mark=2"
-
-# 加速清理大量 TIME_WAIT 积压（短连接场景如迅雷/P2P）
-tw_count=$(conntrack -C 2>/dev/null)
-tcp_tw=$(conntrack -L --state TIME_WAIT 2>/dev/null | wc -l)
-if [ "$tcp_tw" -gt 100 ] 2>/dev/null; then
-  log "  TIME_WAIT: $tcp_tw / $tw_count, 清理中..."
-  conntrack -D --state TIME_WAIT 2>/dev/null
-  log "  TIME_WAIT 已清理"
-else
-  log "  TIME_WAIT: $tcp_tw / $tw_count, 无需清理"
+if [ "$mode" = --check ]; then
+  batch=$(mktemp /tmp/ecmp-check.XXXXXX)
+  trap 'rm -f "$batch"' EXIT
+  trap 'exit 1' HUP INT TERM
+  {
+    printf 'add table ip ecmp\nflush table ip ecmp\n'
+    printf 'add table ip6 ecmp\nflush table ip6 ecmp\n'
+    cat /etc/ecmp-rules.nft
+  } > "$batch"
+  nft -c -f "$batch"
+  echo 'ECMP transaction syntax OK; no live changes made.'
+  exit 0
 fi
-log "  conntrack done"
-
-# 4. sysctl -p 重载内核参数
-log "sysctl reload..."
-sysctl -p >/dev/null 2>&1
-log "  sysctl.conf reloaded"
-
-# 5. 清 ARP 缓存
-log "ARP cache flush..."
-ip neigh flush all 2>/dev/null
-log "  arp flushed"
-
-# 6. 释放内核缓存（pagecache/dentries/inodes，回收内存）
-log "kernel cache drop..."
-sync
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-log "  kernel caches dropped"
-
-log "=== ecmp-reload complete ==="
+if ! ip -4 addr show | grep -Eq 'inet .* peer .*pppoe-wan(b)?'; then
+  echo 'No active IPv4 PPPoE WAN; no changes made.' >&2
+  exit 1
+fi
+# Source the same locked, checked transaction used by WAN events.
+ACTION=manual
+INTERFACE=ecmp-reload
+. "$HOTPLUG"
+multipath_update
+ echo 'ECMP reload complete; existing connections and caches preserved.'
+if [ "$mode" = --recover ]; then
+  echo 'Explicit recovery: deleting marked connections and flushing caches.'
+  conntrack -D --mark 1 || true
+  conntrack -D --mark 2 || true
+  ip neigh flush all
+  sync
+  echo 3 > /proc/sys/vm/drop_caches
+fi
